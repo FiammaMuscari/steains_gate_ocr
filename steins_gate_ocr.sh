@@ -8,22 +8,32 @@ YELLOW='\033[1;33m'
 PURPLE='\033[0;35m'
 NC='\033[0m' # No Color
 
-# Crear directorio para historial si no existe
-HISTORY_DIR="$HOME/steins_gate_ocr_history"
-mkdir -p "$HISTORY_DIR"
+# Directorio donde está el script (steins-gate-tools)
+SCRIPT_DIR="$HOME/steins-gate-tools"
+mkdir -p "$SCRIPT_DIR"
 
-echo -e "${BLUE}🎮 Steins;Gate OCR - Extractor Mejorado v2.0${NC}"
+# Archivo principal donde se acumula todo el texto (en la misma carpeta del script)
+MAIN_TEXT_FILE="$SCRIPT_DIR/steins_gate_text.txt"
+
+# Crear archivo principal si no existe (sin encabezado inicial)
+if [ ! -f "$MAIN_TEXT_FILE" ]; then
+    touch "$MAIN_TEXT_FILE"
+fi
+
+echo -e "${BLUE}🎮 Steins;Gate OCR - Extractor de Solo Texto v3.0${NC}"
 echo "=================================================="
 echo ""
-echo -e "${YELLOW}📋 INSTRUCCIONES MEJORADAS:${NC}"
+echo -e "${YELLOW}📋 INSTRUCCIONES:${NC}"
 echo "1. Abre PPSSPP y carga Steins;Gate"
 echo "2. Espera a que aparezca NUEVO texto japonés"
 echo "3. Presiona ENTER para capturar"
-echo "4. Selecciona EXACTAMENTE la caja de texto (sin bordes ni menús)"
-echo "5. El script detectará automáticamente texto duplicado"
+echo "4. Selecciona EXACTAMENTE la caja de texto"
+echo "5. El texto se acumulará automáticamente en un archivo"
+echo ""
+echo -e "${GREEN}📄 Archivo de texto: $MAIN_TEXT_FILE${NC}"
 echo ""
 
-# Función para limpiar archivos temporales
+# Función para limpiar archivos temporales (solo imágenes)
 cleanup_temp() {
     rm -f /tmp/steins_gate_*.png 2>/dev/null
 }
@@ -32,8 +42,6 @@ cleanup_temp() {
 preprocess_image() {
     local input_img="$1"
     local output_img="$2"
-    
-    echo -e "${PURPLE}🔧 Procesando imagen: $(basename "$input_img") -> $(basename "$output_img")${NC}"
     
     # Múltiples pasos de procesamiento para mejorar OCR de kanjis
     convert "$input_img" \
@@ -45,13 +53,11 @@ preprocess_image() {
         -threshold 50% \
         -morphology Open Diamond:1 \
         -despeckle \
-        "$output_img"
+        "$output_img" 2>/dev/null
     
     if [ -f "$output_img" ]; then
-        echo -e "${GREEN}✅ Imagen procesada correctamente${NC}"
         return 0
     else
-        echo -e "${RED}❌ Error al procesar imagen${NC}"
         return 1
     fi
 }
@@ -61,13 +67,10 @@ clean_japanese_text() {
     local input_text="$1"
     local output_text="$2"
     
-    # Leer el texto y limpiarlo
     if [ -f "$input_text" ] && [ -s "$input_text" ]; then
-        # Limpiar y escribir al archivo de salida
         sed 's/^[[:space:]]*//;s/[[:space:]]*$//' "$input_text" | \
         grep -v '^[[:space:]]*$' > "$output_text"
         
-        # Verificar que el archivo de salida tiene contenido
         if [ -s "$output_text" ]; then
             return 0
         else
@@ -81,33 +84,51 @@ clean_japanese_text() {
 # Función para comparar con texto anterior
 is_duplicate_text() {
     local new_text_file="$1"
-    local history_dir="$2"
     
     if [ ! -f "$new_text_file" ] || [ ! -s "$new_text_file" ]; then
         return 1
     fi
     
-    # Obtener el contenido del nuevo texto
-    local new_content=$(cat "$new_text_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 200)
+    local new_content=$(cat "$new_text_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 100)
     
     if [ -z "$new_content" ]; then
         return 1
     fi
     
-    # Comparar con los últimos 5 archivos
-    for prev_file in $(ls -t "$history_dir"/steins_gate_text_*.txt 2>/dev/null | head -5); do
-        if [ -f "$prev_file" ]; then
-            local prev_content=$(cat "$prev_file" 2>/dev/null | tr -d '\n\r\t ' | head -c 200)
-            if [ "$new_content" = "$prev_content" ]; then
-                return 0  # Es duplicado
-            fi
+    # Comparar exactamente con la última línea no vacía del archivo principal
+    if [ -f "$MAIN_TEXT_FILE" ] && [ -s "$MAIN_TEXT_FILE" ]; then
+        local last_line=$(tail -1 "$MAIN_TEXT_FILE" | tr -d '\n\r\t ' | head -c 100)
+        if [ "$new_content" = "$last_line" ]; then
+            return 0  # Es duplicado exacto
         fi
-    done
+    fi
     return 1  # No es duplicado
+}
+
+# Función para agregar texto al archivo principal
+append_text_to_main() {
+    local text_file="$1"
+    
+    if [ -f "$text_file" ] && [ -s "$text_file" ]; then
+        # Si el archivo principal no existe, crearlo sin encabezado especial
+        if [ ! -f "$MAIN_TEXT_FILE" ]; then
+            cat "$text_file" > "$MAIN_TEXT_FILE"
+        else
+            # Solo agregar una nueva línea y el texto
+            echo "" >> "$MAIN_TEXT_FILE"
+            cat "$text_file" >> "$MAIN_TEXT_FILE"
+        fi
+        return 0
+    else
+        return 1
+    fi
 }
 
 # Limpiar archivos temporales al inicio
 cleanup_temp
+
+# Contador de capturas
+capture_count=0
 
 while true; do
     echo ""
@@ -115,61 +136,42 @@ while true; do
     
     if [[ "$REPLY" == "q" ]] || [[ "$REPLY" == "Q" ]]; then
         echo -e "${BLUE}👋 ¡Hasta luego!${NC}"
+        echo -e "${BLUE}📄 Texto completo guardado en: $MAIN_TEXT_FILE${NC}"
         cleanup_temp
         exit 0
     fi
     
-    echo -e "${YELLOW}📸 Capturando región... Selecciona SOLO la caja de diálogo:${NC}"
+    ((capture_count++))
+    echo -e "${YELLOW}📸 Captura #$capture_count - Selecciona SOLO la caja de diálogo:${NC}"
     
     # Capturar con scrot
     scrot -s -q 100 /tmp/steins_gate_raw.png 2>/dev/null
     
     # Verificar captura
     if [ ! -f "/tmp/steins_gate_raw.png" ]; then
-        echo -e "${RED}❌ No se capturó imagen con scrot. Intentando con ImageMagick...${NC}"
         import /tmp/steins_gate_raw.png 2>/dev/null
     fi
     
     if [ -f "/tmp/steins_gate_raw.png" ]; then
-        echo -e "${GREEN}✅ Imagen capturada: $(ls -lh /tmp/steins_gate_raw.png | awk '{print $5}')${NC}"
-        
-        # Procesar imagen
+        # Procesar imagen (temporal)
         if preprocess_image "/tmp/steins_gate_raw.png" "/tmp/steins_gate_processed.png"; then
             
-            # OCR con múltiples configuraciones
             echo -e "${PURPLE}🔍 Extrayendo texto japonés...${NC}"
             
             # Limpiar archivos de salida anteriores
             rm -f /tmp/steins_gate_output*.txt 2>/dev/null
             
-            # Método 1: PSM 6 para bloques de texto uniforme
-            echo -e "${PURPLE}   Método 1: PSM 6 (bloques de texto)${NC}"
+            # OCR con múltiples configuraciones
             tesseract /tmp/steins_gate_processed.png /tmp/steins_gate_output1 -l jpn --psm 6 --oem 1 \
                 -c preserve_interword_spaces=1 \
                 -c tessedit_char_blacklist='|[]{}()<>' 2>/dev/null
             
-            # Método 2: PSM 3 como respaldo
-            echo -e "${PURPLE}   Método 2: PSM 3 (página completa)${NC}"
             tesseract /tmp/steins_gate_processed.png /tmp/steins_gate_output2 -l jpn --psm 3 --oem 1 \
                 -c preserve_interword_spaces=1 2>/dev/null
             
-            # Método 3: PSM 7 para líneas de texto
-            echo -e "${PURPLE}   Método 3: PSM 7 (líneas de texto)${NC}"
             tesseract /tmp/steins_gate_processed.png /tmp/steins_gate_output3 -l jpn --psm 7 --oem 1 2>/dev/null
             
-            # Verificar qué archivos se crearon
-            echo -e "${BLUE}📋 Archivos generados por OCR:${NC}"
-            for i in 1 2 3; do
-                output_file="/tmp/steins_gate_output${i}.txt"
-                if [ -f "$output_file" ]; then
-                    size=$(wc -c < "$output_file" 2>/dev/null || echo "0")
-                    echo "   - Método $i: $size caracteres"
-                else
-                    echo "   - Método $i: NO GENERADO"
-                fi
-            done
-            
-            # Elegir el mejor resultado (el más largo que tenga contenido)
+            # Elegir el mejor resultado
             best_output=""
             max_length=0
             
@@ -185,79 +187,58 @@ while true; do
             done
             
             if [ -n "$best_output" ] && [ -s "$best_output" ]; then
-                echo -e "${GREEN}🏆 Mejor resultado: $(basename "$best_output") con $max_length caracteres${NC}"
-                
                 # Limpiar el texto
                 if clean_japanese_text "$best_output" "/tmp/steins_gate_final.txt"; then
                     
-                    echo -e "${GREEN}✅ Texto limpiado correctamente${NC}"
-                    
-                    # Verificar contenido final
-                    final_size=$(wc -c < "/tmp/steins_gate_final.txt" 2>/dev/null || echo "0")
-                    echo -e "${BLUE}📏 Texto final: $final_size caracteres${NC}"
-                    
                     # Verificar si es texto duplicado
-                    if is_duplicate_text "/tmp/steins_gate_final.txt" "$HISTORY_DIR"; then
-                        echo -e "${YELLOW}⚠️ TEXTO DUPLICADO DETECTADO${NC}"
-                        echo -e "${YELLOW}Este texto ya fue capturado anteriormente.${NC}"
+                    if is_duplicate_text "/tmp/steins_gate_final.txt"; then
+                        echo -e "${YELLOW}⚠️ TEXTO DUPLICADO DETECTADO - No agregado${NC}"
                     else
-                        # Mostrar resultado
+                        # Mostrar resultado en consola
                         echo ""
-                        echo -e "${GREEN}📝 TEXTO EXTRAÍDO DE STEINS;GATE:${NC}"
+                        echo -e "${GREEN}📝 NUEVO TEXTO EXTRAÍDO:${NC}"
                         echo "=================================="
                         cat /tmp/steins_gate_final.txt
                         echo "=================================="
-                        echo ""
                         
-                        # Guardar en historial con timestamp
-                        timestamp=$(date "+%Y%m%d_%H%M%S")
-                        output_file="$HISTORY_DIR/steins_gate_text_${timestamp}.txt"
-                        
-                        # Copiar el archivo
-                        cp "/tmp/steins_gate_final.txt" "$output_file"
-                        
-                        if [ -f "$output_file" ]; then
-                            echo -e "${GREEN}💾 Texto guardado en: $output_file${NC}"
+                        # Agregar al archivo principal
+                        if append_text_to_main "/tmp/steins_gate_final.txt"; then
+                            char_count=$(wc -m < "/tmp/steins_gate_final.txt" 2>/dev/null || echo "0")
+                            total_lines=$(wc -l < "$MAIN_TEXT_FILE" 2>/dev/null || echo "0")
                             
-                            # Mostrar estadísticas
-                            char_count=$(wc -m < "$output_file" 2>/dev/null || echo "0")
-                            line_count=$(wc -l < "$output_file" 2>/dev/null || echo "0")
-                            echo -e "${BLUE}📊 Estadísticas: ${char_count} caracteres, ${line_count} líneas${NC}"
-                            
-                            # Mostrar ruta completa
-                            echo -e "${BLUE}📂 Ruta completa: $(realpath "$output_file")${NC}"
+                            echo -e "${GREEN}✅ Texto agregado al archivo principal${NC}"
+                            echo -e "${BLUE}📊 Este fragmento: ${char_count} caracteres${NC}"
+                            echo -e "${BLUE}📄 Total líneas en archivo: ${total_lines}${NC}"
                         else
-                            echo -e "${RED}❌ Error al guardar el archivo${NC}"
+                            echo -e "${RED}❌ Error al agregar texto al archivo principal${NC}"
                         fi
                     fi
                 else
                     echo -e "${RED}❌ Error al limpiar el texto${NC}"
                 fi
             else
-                echo -e "${RED}❌ No se detectó texto japonés en ningún método${NC}"
+                echo -e "${RED}❌ No se detectó texto japonés${NC}"
                 echo ""
-                echo -e "${YELLOW}💡 CONSEJOS PARA MEJOR RECONOCIMIENTO:${NC}"
-                echo "- Selecciona EXACTAMENTE la caja de texto (sin bordes blancos/negros)"
+                echo -e "${YELLOW}💡 CONSEJOS:${NC}"
+                echo "- Selecciona EXACTAMENTE la caja de texto"
                 echo "- Asegúrate de que el texto sea claro y de buen tamaño"
-                echo "- Evita seleccionar botones, menús o elementos de la interfaz"
-                echo "- El texto debe ser la parte principal de tu selección"
-                echo "- Si el texto es muy pequeño, acerca la cámara en PPSSPP"
-                
-                # Mostrar información de debug
-                echo -e "${BLUE}🔍 Debug - Archivos OCR generados:${NC}"
-                ls -la /tmp/steins_gate_output*.txt 2>/dev/null || echo "   Ningún archivo generado"
+                echo "- Evita bordes y elementos de la interfaz"
             fi
         else
             echo -e "${RED}❌ Error al procesar la imagen${NC}"
         fi
         
-        echo -e "${BLUE}🖼️ Archivos temporales en /tmp/ para revisión${NC}"
-        echo "   - Imagen original: /tmp/steins_gate_raw.png"
-        echo "   - Imagen procesada: /tmp/steins_gate_processed.png"
+        # Limpiar imágenes temporales después de cada captura
+        cleanup_temp
         
     else
         echo -e "${RED}❌ Error al capturar pantalla${NC}"
-        echo -e "${YELLOW}💡 Asegúrate de tener 'scrot' instalado: sudo apt install scrot${NC}"
-        echo -e "${YELLOW}💡 O 'imagemagick': sudo apt install imagemagick${NC}"
+        echo -e "${YELLOW}💡 Instala: sudo apt install scrot imagemagick${NC}"
+    fi
+    
+    # Mostrar estado del archivo
+    if [ -f "$MAIN_TEXT_FILE" ]; then
+        total_size=$(wc -c < "$MAIN_TEXT_FILE" 2>/dev/null || echo "0")
+        echo -e "${BLUE}📈 Archivo actual: ${total_size} caracteres totales${NC}"
     fi
 done
