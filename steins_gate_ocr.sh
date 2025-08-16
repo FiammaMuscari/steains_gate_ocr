@@ -119,7 +119,7 @@ cleanup_temp
 
 count=0
 while true; do
-    read -p "$(echo -e ${GREEN}📸 ENTER para capturar y traducir [q para salir]:${NC}) "
+    read -p "$(echo -e ${GREEN}📸 ENTER para capturar:${NC}) "
     [[ "$REPLY" =~ ^[qQ]$ ]] && break
 
     ((count++))
